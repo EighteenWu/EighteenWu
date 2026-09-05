@@ -95,39 +95,109 @@ function bfs(start, goal, blocked, cols, rows) {
   return null;
 }
 
-function nearestFoodPath(head, foods, blocked, cols, rows) {
-  const foodSet = new Set(foods.map((f) => key(f.x, f.y)));
-  const prev = new Map([[key(head.x, head.y), null]]);
-  const q = [head];
-  while (q.length) {
-    const cur = q.shift();
-    for (const n of dirs(cur.x, cur.y)) {
-      if (!inBoard(n.x, n.y, cols, rows)) continue;
-      const nk = key(n.x, n.y);
-      if (prev.has(nk)) continue;
-      if (blocked.has(nk) && !foodSet.has(nk)) continue;
-      prev.set(nk, cur);
-      if (foodSet.has(nk)) {
-        const path = [n];
-        let p = cur;
-        const startKey = key(head.x, head.y);
-        while (key(p.x, p.y) !== startKey) {
-          path.push(p);
-          p = prev.get(key(p.x, p.y));
-        }
-        path.reverse();
-        return path;
-      }
-      q.push(n);
-    }
-  }
-  return null;
+function bodySet(snake) {
+  return new Set(snake.map((p) => key(p.x, p.y)));
 }
 
-function anySafe(head, blocked, cols, rows) {
-  return dirs(head.x, head.y).find(
-    (n) => inBoard(n.x, n.y, cols, rows) && !blocked.has(key(n.x, n.y)),
-  );
+function blockedForMove(snake) {
+  const blocked = bodySet(snake);
+  const tail = snake[snake.length - 1];
+  blocked.delete(key(tail.x, tail.y));
+  return blocked;
+}
+
+function floodCount(start, blocked, cols, rows) {
+  const seen = new Set([key(start.x, start.y)]);
+  const q = [start];
+  let n = 0;
+  while (q.length) {
+    const cur = q.shift();
+    n += 1;
+    for (const next of dirs(cur.x, cur.y)) {
+      if (!inBoard(next.x, next.y, cols, rows)) continue;
+      const nk = key(next.x, next.y);
+      if (seen.has(nk) || blocked.has(nk)) continue;
+      seen.add(nk);
+      q.push(next);
+    }
+  }
+  return n;
+}
+
+function walkPath(snake, path, growOnLast) {
+  let next = snake.map((p) => ({ ...p }));
+  for (let i = 0; i < path.length; i++) {
+    next = [path[i], ...next];
+    if (!(growOnLast && i === path.length - 1)) next.pop();
+  }
+  return next;
+}
+
+function isSafeSnake(snake, cols, rows) {
+  const head = snake[0];
+  const tail = snake[snake.length - 1];
+  const blocked = blockedForMove(snake);
+  const toTail = bfs(head, tail, blocked, cols, rows);
+  const spaceBlocked = bodySet(snake);
+  spaceBlocked.delete(key(head.x, head.y));
+  spaceBlocked.delete(key(tail.x, tail.y));
+  const space = floodCount(head, spaceBlocked, cols, rows);
+  return toTail !== null || space >= snake.length;
+}
+
+function maxSpaceStep(snake, remaining, cols, rows) {
+  const head = snake[0];
+  const tail = snake[snake.length - 1];
+  const occupied = bodySet(snake);
+  let best = null;
+  let bestSpace = -1;
+  for (const next of dirs(head.x, head.y)) {
+    if (!inBoard(next.x, next.y, cols, rows)) continue;
+    const nk = key(next.x, next.y);
+    if (occupied.has(nk) && nk !== key(tail.x, tail.y)) continue;
+    const grow = remaining.has(nk);
+    const after = walkPath(snake, [next], grow);
+    const spaceBlocked = bodySet(after);
+    spaceBlocked.delete(key(after[0].x, after[0].y));
+    const space = floodCount(after[0], spaceBlocked, cols, rows);
+    if (space > bestSpace) {
+      bestSpace = space;
+      best = next;
+    }
+  }
+  return best;
+}
+
+function pickStep(snake, remaining, cols, rows, idle) {
+  const head = snake[0];
+  const tail = snake[snake.length - 1];
+  const occupied = bodySet(snake);
+  const blocked = blockedForMove(snake);
+  const foods = [...remaining.values()]
+    .filter((f) => !occupied.has(key(f.x, f.y)))
+    .sort((a, b) => a.x - b.x || dist(head, a) - dist(head, b) || a.y - b.y);
+
+  let unsafe = null;
+  let unsafeSpace = -1;
+  for (const food of foods) {
+    const path = bfs(head, food, blocked, cols, rows);
+    if (!path || !path.length) continue;
+    const after = walkPath(snake, path, true);
+    if (isSafeSnake(after, cols, rows)) return path[0];
+    const spaceBlocked = bodySet(after);
+    spaceBlocked.delete(key(after[0].x, after[0].y));
+    const space = floodCount(after[0], spaceBlocked, cols, rows);
+    if (space > unsafeSpace) {
+      unsafeSpace = space;
+      unsafe = path[0];
+    }
+  }
+
+  const toTail = bfs(head, tail, blocked, cols, rows);
+  if (toTail && toTail.length && idle < 14) return toTail[0];
+  if (unsafe) return unsafe;
+  if (toTail && toTail.length) return toTail[0];
+  return maxSpaceStep(snake, remaining, cols, rows);
 }
 
 function levelFromCount(count, cuts) {
@@ -199,7 +269,8 @@ function simulate(grid) {
   const eatenAt = new Map();
   let ended = "clear";
   let guard = 0;
-  const limit = cols * rows * 10;
+  let idle = 0;
+  const limit = cols * rows * 24;
 
   const snapshot = (justAte = false, dead = false) => {
     frames.push({
@@ -214,16 +285,7 @@ function simulate(grid) {
   snapshot();
 
   while (remaining.size && guard++ < limit) {
-    const head = snake[0];
-    const tail = snake[snake.length - 1];
-    const occupied = new Set(snake.map((p) => key(p.x, p.y)));
-    const blocked = new Set(occupied);
-    blocked.delete(key(tail.x, tail.y));
-
-    const targets = [...remaining.values()].filter((f) => !occupied.has(key(f.x, f.y)));
-    let path = nearestFoodPath(head, targets, blocked, cols, rows);
-    if (!path) path = bfs(head, tail, blocked, cols, rows);
-    const step = path && path.length ? path[0] : anySafe(head, blocked, cols, rows);
+    const step = pickStep(snake, remaining, cols, rows, idle);
     if (!step) {
       ended = remaining.size ? "stuck" : "clear";
       snapshot(false, true);
@@ -248,8 +310,10 @@ function simulate(grid) {
       remaining.delete(stepKey);
       score += ate.count;
       eatenAt.set(stepKey, frames.length);
+      idle = 0;
     } else {
       snake.pop();
+      idle += 1;
     }
     snapshot(Boolean(ate), false);
   }
