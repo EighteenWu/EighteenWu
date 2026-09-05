@@ -15,7 +15,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Generate snake SVGs
+      - uses: actions/checkout@v4
+
+      - name: Generate arcade snake match
+        run: node scripts/generate-arcade-snake.mjs
+        env:
+          OUTPUT: dist/arcade-snake.svg
+
+      - name: Generate contribution snake
         uses: Platane/snk/svg-only@v3
         with:
           github_user_name: ${{ github.repository_owner }}
@@ -23,7 +30,7 @@ jobs:
             dist/github-contribution-grid-snake.svg
             dist/github-contribution-grid-snake-dark.svg?palette=github-dark
 
-      - name: Push snake SVGs to output branch
+      - name: Push animations to output branch
         uses: crazy-max/ghaction-github-pages@v4
         with:
           target_branch: output
