@@ -17,18 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate arcade snake match
-        run: node scripts/generate-arcade-snake.mjs
-        env:
-          OUTPUT: dist/arcade-snake.svg
-
       - name: Generate contribution snake
-        uses: Platane/snk/svg-only@v3
-        with:
-          github_user_name: ${{ github.repository_owner }}
-          outputs: |
-            dist/github-contribution-grid-snake.svg
-            dist/github-contribution-grid-snake-dark.svg?palette=github-dark
+        run: node scripts/generate-contribution-snake.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_USER: ${{ github.repository_owner }}
+          OUTPUT_DIR: dist
 
       - name: Push animations to output branch
         uses: crazy-max/ghaction-github-pages@v4
