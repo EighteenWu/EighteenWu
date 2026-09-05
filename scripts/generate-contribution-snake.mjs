@@ -11,8 +11,8 @@ const SIZE_CELL = 16;
 const SIZE_DOT = 12;
 const DOT_R = 2;
 const START_LEN = 4;
-const MAX_LEN = 48;
-const STEP_MS = 100;
+const MAX_LEN = 24;
+const STEP_MS = 110;
 const FREEZE_FRAMES = 6;
 const ASSEMBLE_FRAMES = 22;
 const HOLD_FRAMES = 32;
@@ -51,6 +51,84 @@ function key(x, y) {
 
 function dist(a, b) {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
+
+function dirs(x, y) {
+  return [
+    { x: x + 1, y },
+    { x: x - 1, y },
+    { x, y: y + 1 },
+    { x, y: y - 1 },
+  ];
+}
+
+function inBoard(x, y, cols, rows) {
+  return x >= 0 && y >= 0 && x < cols && y < rows;
+}
+
+function bfs(start, goal, blocked, cols, rows) {
+  const goalKey = key(goal.x, goal.y);
+  const startKey = key(start.x, start.y);
+  if (startKey === goalKey) return [];
+  const prev = new Map([[startKey, null]]);
+  const q = [start];
+  while (q.length) {
+    const cur = q.shift();
+    for (const n of dirs(cur.x, cur.y)) {
+      if (!inBoard(n.x, n.y, cols, rows)) continue;
+      const nk = key(n.x, n.y);
+      if (prev.has(nk)) continue;
+      if (blocked.has(nk) && nk !== goalKey) continue;
+      prev.set(nk, cur);
+      if (nk === goalKey) {
+        const path = [{ x: n.x, y: n.y }];
+        let p = cur;
+        while (key(p.x, p.y) !== startKey) {
+          path.push(p);
+          p = prev.get(key(p.x, p.y));
+        }
+        path.reverse();
+        return path;
+      }
+      q.push(n);
+    }
+  }
+  return null;
+}
+
+function nearestFoodPath(head, foods, blocked, cols, rows) {
+  const foodSet = new Set(foods.map((f) => key(f.x, f.y)));
+  const prev = new Map([[key(head.x, head.y), null]]);
+  const q = [head];
+  while (q.length) {
+    const cur = q.shift();
+    for (const n of dirs(cur.x, cur.y)) {
+      if (!inBoard(n.x, n.y, cols, rows)) continue;
+      const nk = key(n.x, n.y);
+      if (prev.has(nk)) continue;
+      if (blocked.has(nk) && !foodSet.has(nk)) continue;
+      prev.set(nk, cur);
+      if (foodSet.has(nk)) {
+        const path = [n];
+        let p = cur;
+        const startKey = key(head.x, head.y);
+        while (key(p.x, p.y) !== startKey) {
+          path.push(p);
+          p = prev.get(key(p.x, p.y));
+        }
+        path.reverse();
+        return path;
+      }
+      q.push(n);
+    }
+  }
+  return null;
+}
+
+function anySafe(head, blocked, cols, rows) {
+  return dirs(head.x, head.y).find(
+    (n) => inBoard(n.x, n.y, cols, rows) && !blocked.has(key(n.x, n.y)),
+  );
 }
 
 function levelFromCount(count, cuts) {
@@ -98,18 +176,6 @@ async function fetchCalendar(login, token) {
   return weeks;
 }
 
-function sweepRoute(cols, rows) {
-  const route = [];
-  for (let x = 0; x < cols; x++) {
-    if (x % 2 === 0) {
-      for (let y = 0; y < rows; y++) route.push({ x, y });
-    } else {
-      for (let y = rows - 1; y >= 0; y--) route.push({ x, y });
-    }
-  }
-  return route;
-}
-
 function simulate(grid) {
   const cols = grid.length;
   const rows = 7;
@@ -120,9 +186,12 @@ function simulate(grid) {
     }
   }
 
-  const route = sweepRoute(cols, rows);
-  let snake = [];
-  for (let i = START_LEN - 1; i >= 0; i--) snake.push({ ...route[i] });
+  let snake = [
+    { x: 2, y: 3 },
+    { x: 1, y: 3 },
+    { x: 0, y: 3 },
+    { x: 0, y: 2 },
+  ].slice(0, START_LEN);
 
   const remaining = new Map(foods.map((f) => [key(f.x, f.y), f]));
   for (const p of snake) remaining.delete(key(p.x, p.y));
@@ -130,6 +199,8 @@ function simulate(grid) {
   const frames = [];
   const eatenAt = new Map();
   let ended = "clear";
+  let guard = 0;
+  const limit = cols * rows * 10;
 
   const snapshot = (justAte = false, dead = false) => {
     frames.push({
@@ -143,22 +214,41 @@ function simulate(grid) {
 
   snapshot();
 
-  for (let i = START_LEN; i < route.length; i++) {
-    const step = route[i];
+  while (remaining.size && guard++ < limit) {
+    const head = snake[0];
+    const tail = snake[snake.length - 1];
     const occupied = new Set(snake.map((p) => key(p.x, p.y)));
-    const tailKey = key(snake[snake.length - 1].x, snake[snake.length - 1].y);
-    const ate = remaining.get(key(step.x, step.y));
-    if (occupied.has(key(step.x, step.y)) && key(step.x, step.y) !== tailKey) {
+    const blocked = new Set(occupied);
+    blocked.delete(key(tail.x, tail.y));
+
+    const targets = [...remaining.values()].filter((f) => !occupied.has(key(f.x, f.y)));
+    let path = nearestFoodPath(head, targets, blocked, cols, rows);
+    if (!path) path = bfs(head, tail, blocked, cols, rows);
+    const step = path && path.length ? path[0] : anySafe(head, blocked, cols, rows);
+    if (!step) {
+      ended = remaining.size ? "stuck" : "clear";
+      snapshot(false, true);
+      break;
+    }
+
+    const stepKey = key(step.x, step.y);
+    const growing = remaining.has(stepKey);
+    const hitSelf = snake.some((p, i) => {
+      if (p.x !== step.x || p.y !== step.y) return false;
+      return growing || i !== snake.length - 1;
+    });
+    if (hitSelf || !inBoard(step.x, step.y, cols, rows)) {
       ended = "dead";
       snapshot(false, true);
       break;
     }
 
+    const ate = remaining.get(stepKey);
     snake = [step, ...snake];
     if (ate) {
-      remaining.delete(key(step.x, step.y));
+      remaining.delete(stepKey);
       score += ate.count;
-      eatenAt.set(key(step.x, step.y), frames.length);
+      eatenAt.set(stepKey, frames.length);
       if (snake.length > MAX_LEN) snake.pop();
     } else {
       snake.pop();
@@ -166,8 +256,8 @@ function simulate(grid) {
     snapshot(Boolean(ate), false);
   }
 
-  if (remaining.size) ended = "stuck";
-  else if (ended !== "dead") ended = "clear";
+  if (remaining.size && ended === "clear") ended = "stuck";
+  if (!remaining.size) ended = "clear";
 
   return { frames, eatenAt, score, ended, leftover: remaining.size, foods };
 }
@@ -226,15 +316,13 @@ function visibilityKeyframes(onAt, n) {
 }
 
 function compactKeyframes(kf) {
+  const styleOf = (item) => item.replace(/^[0-9.]+%/, "");
   const out = [];
   for (let i = 0; i < kf.length; i++) {
-    const keepHold = kf[i].startsWith("99.");
-    if (
-      i === 0 ||
-      i === kf.length - 1 ||
-      keepHold ||
-      kf[i].replace(/^[0-9.]+%/, "") !== kf[i - 1].replace(/^[0-9.]+%/, "")
-    ) {
+    const prev = i > 0 ? styleOf(kf[i - 1]) : null;
+    const cur = styleOf(kf[i]);
+    const next = i < kf.length - 1 ? styleOf(kf[i + 1]) : null;
+    if (i === 0 || i === kf.length - 1 || kf[i].startsWith("99.") || cur !== prev || cur !== next) {
       out.push(kf[i]);
     }
   }
@@ -296,12 +384,12 @@ function buildSvg(grid, match, theme) {
 
       kf.push(`0%{fill:var(--c${cell.level});transform:translate(0px,0px);opacity:1}`);
       if (eatFrame != null) {
-        const t = pct(eatFrame);
-        kf.push(`${t}%{fill:var(--c${cell.level})}`);
-        kf.push(`${((eatFrame + 0.01) / n * 100).toFixed(3)}%{fill:var(--ce)}`);
+        kf.push(`${pct(eatFrame)}%{fill:var(--c${cell.level});transform:translate(0px,0px);opacity:1}`);
+        kf.push(`${((eatFrame + 0.4) / n * 100).toFixed(3)}%{fill:var(--ce);transform:translate(0px,0px);opacity:1}`);
+        kf.push(`${pct(playN)}%{fill:var(--ce);transform:translate(0px,0px);opacity:1}`);
       }
       if (showOver) {
-        kf.push(`${pct(playN)}%{fill:var(--c${cell.level});transform:translate(0px,0px);opacity:1}`);
+        kf.push(`${pct(assembleStart)}%{fill:var(--c${cell.level});transform:translate(0px,0px);opacity:1}`);
         kf.push(
           `${pct(assembleEnd)}%{fill:var(--c${cell.level});transform:translate(${toX - fromX}px,${toY - fromY}px);opacity:${keep ? 1 : 0}}`,
         );
