@@ -11,7 +11,6 @@ const SIZE_CELL = 16;
 const SIZE_DOT = 12;
 const DOT_R = 2;
 const START_LEN = 4;
-const MAX_LEN = 24;
 const STEP_MS = 110;
 const FREEZE_FRAMES = 6;
 const ASSEMBLE_FRAMES = 22;
@@ -249,7 +248,6 @@ function simulate(grid) {
       remaining.delete(stepKey);
       score += ate.count;
       eatenAt.set(stepKey, frames.length);
-      if (snake.length > MAX_LEN) snake.pop();
     } else {
       snake.pop();
     }
